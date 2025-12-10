@@ -1,0 +1,20 @@
+#!api-testing-mock
+#!arg --prefix /
+# yaml-language-server: $schema=https://linuxsuren.github.io/api-testing/api-testing-mock-schema.json
+objects:
+  - name: reports
+    sample: |
+      {
+        "name": "api-testing",
+        "remark": "",
+        "taskID": "",
+        "failedCount": 1,
+        "color": "{{ randEnum "blue" "read" "pink" }}"
+      }
+items:
+  - name: base64
+    request:
+      path: /v1/base64
+    response:
+      body: aGVsbG8=
+      encoder: base64
