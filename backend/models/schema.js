@@ -118,6 +118,11 @@ const propertySchema = new mongoose.Schema(
         changedAt: { type: Date, default: Date.now },
       },
     ],
+
+
+    // login and Authentication
+    
+     
   },
   { timestamps: true }
 );
