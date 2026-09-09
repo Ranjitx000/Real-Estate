@@ -1,0 +1,11 @@
+node_modules
+dist
+
+# Environment variables (never commit secrets)
+.env
+.env.local
+# .env.example is intentionally NOT ignored — safe to commit
+
+# OS
+.DS_Store
+Thumbs.db

@@ -156,6 +156,16 @@ export const updateproperty = async (req, res) => {
     if (!existing) {
       return res.status(404).json({ msg: "Property not found" });
     }
+    // Allow if user is ADMIN -OR- user is the creator (Agent/Owner)
+    const isCreator = 
+        existing.agent?.toString() === req.user._id.toString() || 
+        existing.owner?.toString() === req.user._id.toString();
+
+        if (req.user.role !== "admin" && !isCreator) {
+        return res.status(403).json({ 
+            msg: "Access denied. You can only update your own properties." 
+        });
+    }
 
     const updated = await Property.findByIdAndUpdate(id, req.body, {
       new: true,
