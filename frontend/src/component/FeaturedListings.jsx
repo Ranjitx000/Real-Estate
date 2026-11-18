@@ -1,47 +1,32 @@
 // components/FeaturedListings.jsx
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { MapPin, Eye, Heart, ArrowUpRight, Route } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import PropertyCard from './PropertyCard';
+import { API } from '../config/api.js';
 
 const FeaturedListings = () => {
-  const properties = [
-    {
-      id: 1,
-      title: 'Oceanview Modern Villa',
-      location: 'Malibu, CA',
-      price: '$2.8M',
-      beds: 4,
-      baths: 3,
-      sqft: 2800,
-      image: 'https://hoirqrkdgbmvpwutwuwj-all.supabase.co/storage/v1/object/public/assets/assets/26b3f294-2885-4440-ae74-eda7506cca9e_800w.jpg',
-      badge: { text: 'New', color: 'bg-cyan-600/90' },
-      virtualTour: true
-    },
-    {
-      id: 2,
-      title: 'Skyline Penthouse Suite',
-      location: 'Manhattan, NY',
-      price: '$5.2M',
-      beds: 5,
-      baths: 4,
-      sqft: 4500,
-      image: 'https://hoirqrkdgbmvpwutwuwj-all.supabase.co/storage/v1/object/public/assets/assets/50eb2e09-7421-4468-b850-e7d07311523d_800w.jpg',
-      badge: { text: 'Premium', color: 'bg-indigo-900/90' },
-      virtualTour: true
-    },
-    {
-      id: 3,
-      title: 'Contemporary Townhouse',
-      location: 'Austin, TX',
-      price: '$1.15M',
-      beds: 3,
-      baths: 3,
-      sqft: 1900,
-      image: 'https://hoirqrkdgbmvpwutwuwj-all.supabase.co/storage/v1/object/public/assets/assets/c493dcb7-d70e-440e-92e9-4b752945750e_800w.jpg',
-      badge: { text: 'Open House', color: 'bg-white/90', textColor: 'text-indigo-900' },
-      directions: true
-    }
-  ];
+  const [properties, setProperties] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const fetchFeatured = async () => {
+      try {
+        setLoading(true);
+        // Assuming listall returns latest first. In a real app, maybe hitting a ?sort=latest or ?featured=true endpoint
+        const res = await fetch(API.properties.list);
+        const data = await res.json();
+        if (data.data) {
+          setProperties(data.data.slice(0, 3)); // Just take the top 3 for the home page
+        }
+      } catch (err) {
+        console.error('Failed to fetch featured listings:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchFeatured();
+  }, []);
 
   return (
     <section className="max-w-7xl sm:px-6 mt-10 mx-auto mb-8 px-4">
@@ -55,17 +40,21 @@ const FeaturedListings = () => {
             <h2 className="text-xl sm:text-2xl text-neutral-100 font-geist tracking-tighter font-medium">
               Featured Listings
             </h2>
-            <a href="#" className="inline-flex items-center gap-2 text-sm text-neutral-200 bg-white/5 hover:bg-white/10 rounded-full px-3 py-1.5 border border-white/10">
+            <Link to="/Listing" className="inline-flex items-center gap-2 text-sm text-neutral-200 bg-white/5 hover:bg-white/10 rounded-full px-3 py-1.5 border border-white/10">
               <span className="font-geist">View all</span>
               <ArrowUpRight className="w-4 h-4 stroke-[1.5]" />
-            </a>
+            </Link>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {properties.map(property => (
-              <PropertyCard key={property.id} property={property} />
-            ))}
-          </div>
+          {loading ? (
+            <div className="text-center py-10 text-neutral-400 font-geist">Loading featured properties...</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+              {properties.map((property) => (
+                <PropertyCard key={property._id || property.id} property={property} />
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </section>

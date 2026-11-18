@@ -1,4 +1,6 @@
 import Property from "../models/schema.js";
+import Inquiry from "../models/Inquiry.js";
+import Visit from "../models/Visit.js";
 import slugify from "slugify";
 import cloudinary from "../config/cloudinary.js";
 import streamifier from "streamifier";
@@ -22,16 +24,25 @@ async function generateUniqueSlug(title) {
 }
 
 // Helper to upload one buffer to Cloudinary
-function uploadBufferToCloudinary(buffer, folder = "property") {
+function uploadBufferToCloudinary(buffer, folder = "property", maxRetries = 2) {
   return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      { folder },
-      (error, result) => {
-        if (error) return reject(error);
-        return resolve(result);
-      }
-    );
-    streamifier.createReadStream(buffer).pipe(uploadStream);
+    const attempt = (retriesLeft) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        { folder, resource_type: "auto", timeout: 60000 },
+        (error, result) => {
+          if (error) {
+            if (retriesLeft > 0 && (error.http_code === 502 || error.http_code === 499 || error.name === "UnexpectedResponse")) {
+              console.warn(`Cloudinary upload returned ${error.http_code || error.message}, retrying (${retriesLeft} left)...`);
+              return setTimeout(() => attempt(retriesLeft - 1), 1500);
+            }
+            return reject(error);
+          }
+          return resolve(result);
+        }
+      );
+      uploadStream.end(buffer);
+    };
+    attempt(maxRetries);
   });
 }
 
@@ -39,6 +50,47 @@ function uploadBufferToCloudinary(buffer, folder = "property") {
 export const Addproperty = async (req, res) => {
   try {
     const addproperty = req.body; // when user send data addproperty can get data
+
+     addproperty.agent = req.user._id;
+
+     if(req.user.role === 'owner') {
+        addproperty.owner = req.user._id;
+    }
+
+    // ── Reconstruct nested location from flat FormData fields ─────────────
+    // Multer does NOT auto-parse bracket notation (location[city] stays as
+    // literal key).  Frontend sends flat keys: locationCity, locationStreet…
+    if (addproperty.locationCity || addproperty.locationStreet || addproperty.locationState) {
+      addproperty.location = {
+        street:  addproperty.locationStreet  || '',
+        city:    addproperty.locationCity    || '',
+        state:   addproperty.locationState   || '',
+        zip:     addproperty.locationZip     || '',
+        country: addproperty.locationCountry || 'India',
+      };
+      // Remove the flat keys so Mongoose doesn't see them
+      ['locationStreet','locationCity','locationState','locationZip','locationCountry']
+        .forEach(k => delete addproperty[k]);
+    }
+
+    // ── Parse amenities — frontend sends a JSON string ────────────────────
+    if (typeof addproperty.amenities === 'string') {
+      try {
+        addproperty.amenities = JSON.parse(addproperty.amenities);
+      } catch {
+        addproperty.amenities = [];
+      }
+    }
+
+    // ── Cast FormData string values to correct JS types ───────────────────
+    if (addproperty.isFeatured !== undefined)
+      addproperty.isFeatured = addproperty.isFeatured === 'true';
+
+    ['price','bedrooms','bathrooms','areaSqft','lotSize','yearBuilt','floors']
+      .forEach(k => {
+        if (addproperty[k] !== undefined && addproperty[k] !== '')
+          addproperty[k] = Number(addproperty[k]);
+      });
 
     // If slug not provided, generate one
     if (!addproperty.slug) {
@@ -65,7 +117,11 @@ export const Addproperty = async (req, res) => {
     const saved = await newProperty.save();
 
     // Invalidate cache
-    await redisClient.del("property=list");
+    try {
+      await redisClient.del("property=list");
+    } catch (cacheErr) {
+      console.log("Redis cache invalidation failed:", cacheErr.message);
+    }
 
     res.status(201).json({
       success: true,
@@ -96,7 +152,12 @@ export const Addproperty = async (req, res) => {
 export const listallproperty = async (req, res) => {
   try {
     const cashakey = "property=list";
-    const cachedData = await redisClient.get(cashakey);
+    let cachedData = null;
+    try {
+      cachedData = await redisClient.get(cashakey);
+    } catch (redisErr) {
+      console.log("Redis get failed for listallproperty:", redisErr.message);
+    }
 
     if (cachedData) {
       return res.status(200).json({
@@ -110,7 +171,11 @@ export const listallproperty = async (req, res) => {
       return res.status(404).json({ msg: "No property found" });
     }
 
-    await redisClient.set(cashakey, JSON.stringify(list), { EX: 60 });
+    try {
+      await redisClient.set(cashakey, JSON.stringify(list), { EX: 60 });
+    } catch (redisErr) {
+      console.log("Redis set failed for listallproperty:", redisErr.message);
+    }
 
     res.status(200).json({ source: "db", data: list });
   } catch (error) {
@@ -119,31 +184,138 @@ export const listallproperty = async (req, res) => {
   }
 };
 
-// GET single property
+// GET single property & increment view counter
 export const getsingleproperty = async (req, res) => {
   try {
     const id = req.params.id;
-    const cashakey = `property:${id}`;
-    const cachedData = await redisClient.get(cashakey);
 
-    if (cachedData) {
-      return res.status(200).json({
-        source: "cache",
-        data: JSON.parse(cachedData),
-      });
-    }
-
-    const single = await Property.findById(id);
+    // Atomically increment the view counter in MongoDB & populate agent
+    const single = await Property.findByIdAndUpdate(
+      id,
+      { $inc: { viewsCount: 1 } },
+      { new: true }
+    ).populate("agent", "name email phone");
 
     if (!single) {
       return res.status(404).json({ msg: "Property not found" });
     }
 
-    await redisClient.set(cashakey, JSON.stringify(single), { EX: 60 });
-
     res.status(200).json({ source: "db", data: single });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+// CREATE Inquiry (from buyer)
+export const createInquiry = async (req, res) => {
+  try {
+    const { propertyId, message, name, email, phone } = req.body;
+
+    if (!propertyId || !message) {
+      return res.status(400).json({ success: false, message: "Property ID and message are required" });
+    }
+
+    const property = await Property.findById(propertyId);
+    if (!property) {
+      return res.status(404).json({ success: false, message: "Property not found" });
+    }
+
+    const inquiryData = {
+      property: propertyId,
+      message,
+      customerName: name || req.user?.name || "Guest Buyer",
+      customerEmail: email || req.user?.email || "",
+      customerPhone: phone || req.user?.phone || "",
+      assignedAgent: property.agent || property.owner,
+      status: "New",
+    };
+
+    if (req.user?._id) {
+      inquiryData.customer = req.user._id;
+    }
+
+    const inquiry = new Inquiry(inquiryData);
+    await inquiry.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Your inquiry has been submitted! An agent will contact you shortly.",
+      data: inquiry,
+    });
+  } catch (error) {
+    console.error("Create inquiry error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// CREATE Visit / Tour Booking (from buyer)
+export const createVisit = async (req, res) => {
+  try {
+    const { propertyId, visitDate, notes, name, email, phone } = req.body;
+
+    if (!propertyId || !visitDate) {
+      return res.status(400).json({ success: false, message: "Property ID and visit date are required" });
+    }
+
+    const property = await Property.findById(propertyId);
+    if (!property) {
+      return res.status(404).json({ success: false, message: "Property not found" });
+    }
+
+    const visitData = {
+      property: propertyId,
+      visitDate: new Date(visitDate),
+      notes: notes || "",
+      customerName: name || req.user?.name || "Guest Buyer",
+      customerEmail: email || req.user?.email || "",
+      customerPhone: phone || req.user?.phone || "",
+      agent: property.agent || property.owner,
+      status: "Pending",
+    };
+
+    if (req.user?._id) {
+      visitData.customer = req.user._id;
+    }
+
+    const visit = new Visit(visitData);
+    await visit.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Tour scheduled successfully! The agent will confirm your appointment.",
+      data: visit,
+    });
+  } catch (error) {
+    console.error("Create visit error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// TOGGLE Favorite (increment/decrement favoritesCount)
+export const toggleFavorite = async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { isFavorite } = req.body; // true = add favorite, false = remove
+
+    const increment = isFavorite ? 1 : -1;
+    const updated = await Property.findByIdAndUpdate(
+      id,
+      { $inc: { favoritesCount: increment } },
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "Property not found" });
+    }
+
+    if (updated.favoritesCount < 0) {
+      updated.favoritesCount = 0;
+      await updated.save();
+    }
+
+    res.status(200).json({ success: true, favoritesCount: updated.favoritesCount });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -172,14 +344,20 @@ export const updateproperty = async (req, res) => {
     });
 
     // Invalidate cache
-    await redisClient.del(`property:${id}`);
-    await redisClient.del("property=list");
+    try {
+      await redisClient.del(`property:${id}`);
+      await redisClient.del("property=list");
+    } catch (cacheErr) {
+      console.log("Redis cache invalidation failed:", cacheErr.message);
+    }
 
     res.status(200).json(updated);
   } catch (error) {
     res.status(500).json({ msg: error.message });
   }
 };
+
+
 
 // DELETE property
 export const deleteproperty = async (req, res) => {
@@ -191,11 +369,26 @@ export const deleteproperty = async (req, res) => {
       return res.status(404).json({ msg: "Property not found" });
     }
 
+     // Allow if user is ADMIN -OR- user is the creator
+    const isCreator = 
+        existing.agent?.toString() === req.user._id.toString() || 
+        existing.owner?.toString() === req.user._id.toString();
+
+    if (req.user.role !== "admin" && !isCreator) {
+        return res.status(403).json({ 
+            msg: "Access denied. You can only delete your own properties." 
+        });
+    }
+
     const deleted = await Property.findByIdAndDelete(id);
 
     // Invalidate cache
-    await redisClient.del(`property:${id}`);
-    await redisClient.del("property=list");
+    try {
+      await redisClient.del(`property:${id}`);
+      await redisClient.del("property=list");
+    } catch (cacheErr) {
+      console.log("Redis cache invalidation failed:", cacheErr.message);
+    }
 
     res.status(200).json({
       msg: "Property deleted successfully",
@@ -206,8 +399,9 @@ export const deleteproperty = async (req, res) => {
   }
 };
 
-// filter Serch property
 
+
+//filter Serch property
 export const getFilteredproperty = async (req, res) => {
   try {
     // 1) Build filter from query (helper must use req.query values, not req)
@@ -233,7 +427,13 @@ export const getFilteredproperty = async (req, res) => {
     const cacheKey = `properties:filter:${queryString}:page=${page}:limit=${limit}:sort=${sort}`;
 
     // 5) Check cache first
-    const cachedData = await redisClient.get(cacheKey);
+    let cachedData = null;
+    try {
+      cachedData = await redisClient.get(cacheKey);
+    } catch (redisErr) {
+      console.log("Redis get failed for getFilteredproperty:", redisErr.message);
+    }
+    
     if (cachedData) {
       return res.status(200).json({
         source: "cache",
@@ -257,7 +457,11 @@ export const getFilteredproperty = async (req, res) => {
     };
 
     // 7) Store in Redis with TTL (seconds)
-    await redisClient.set(cacheKey, JSON.stringify(responseData), { EX: 60 });
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(responseData), { EX: 60 });
+    } catch (redisErr) {
+      console.log("Redis set failed for getFilteredproperty:", redisErr.message);
+    }
 
     res.status(200).json({
       source: "database",

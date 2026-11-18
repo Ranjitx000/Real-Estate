@@ -1,31 +1,68 @@
 import mongoose from "mongoose";
+import bcrypt from "bcryptjs";
 
-const UserloginSchema = new mongoose.Schema({
-    name:{type:String,required:true},
-    email:{type:String,required:true,unique:true},
-    password:{type:String,required:true},
-    phone:{type:String,required:true},
+const UserloginSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    email: {
+      type: String,
+      unique: true,
+      sparse: true,          // allows multiple docs with null email
+      lowercase: true,
+      trim: true,
+    },
+
+    phone: {
+      type: String,              
+      required: true,
+      unique: true,
+      index: true,
+    },
+
+    password: {
+      type: String,
+      required: true,
+      minlength: 6,
+      select: false,            
+    },
+
     role: {
       type: String,
       enum: ["admin", "agent", "owner", "user"],
       default: "user",
     },
-      isVerified: { type: Boolean, default: false },
+
+    // OTP reset
+    resetOtp: String,
+    resetOtpExpiry: Date,
+
+    isVerified: {
+      type: Boolean,
+      default: false,
+    },
     
-},
+    isBlocked: {
+      type: Boolean,
+      default: false,
+    },
+  },
   { timestamps: true }
-)
+);
 
+/// 🔐 Hash password before save
+UserloginSchema.pre("save", async function () {
+  if (!this.isModified("password")) return;
 
-/// hashing password before saving user
-UserloginSchema.pre("save",async function(next){
-  if(this.isModified("password")) return next()
-    this.password=await bcrypt.hash(this.password,10)
-    next()
-} )
+  this.password = await bcrypt.hash(this.password, 10);
+});
 
-/* Compare password */
-UserloginSchema.methods.comparePassword = async function (password) {
+/// 🔑 Compare password
+UserloginSchema.methods.comparePassword = function (password) {
   return bcrypt.compare(password, this.password);
 };
 

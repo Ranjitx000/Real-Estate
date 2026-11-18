@@ -55,6 +55,16 @@ const propertySchema = new mongoose.Schema(
       default: "for_sale",
       index: true,
     },
+    approvalStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected", "sold", "rented"],
+      default: "pending",
+      index: true,
+    },
+    isFeatured: {
+      type: Boolean,
+      default: false,
+    },
     propertyType: {
       type: String,
       enum: ["house", "apartment", "condo", "penthouse", "villa", "townhouse", "land"],
@@ -116,11 +126,10 @@ const propertySchema = new mongoose.Schema(
           enum: ["for_sale", "for_rent", "sold", "off_market"],
         },
         changedAt: { type: Date, default: Date.now },
-      },
+      }, 
     ],
 
 
-    // login and Authentication
     
      
   },
@@ -131,7 +140,7 @@ const propertySchema = new mongoose.Schema(
 propertySchema.index({ price: 1, bedrooms: 1, bathrooms: 1 });
 propertySchema.index({ "location.city": 1, "location.state": 1 });
 propertySchema.index({ propertyType: 1, status: 1 });
-propertySchema.index({ tags: 1 });
+
 
 const Property = mongoose.model("Property", propertySchema);
 export default Property;

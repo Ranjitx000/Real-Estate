@@ -1,5 +1,7 @@
 // pages/PropertyDetailsPage.jsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import {
   MapPin,
   PlayCircle,
@@ -28,58 +30,186 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import PropertyCard from '../component/PropertyCard';
+import { API } from '../config/api.js';
 
-const galleryImages = [
-  'https://images.pexels.com/photos/259580/pexels-photo-259580.jpeg?auto=compress&cs=tinysrgb&w=1600',
-  'https://images.pexels.com/photos/1571459/pexels-photo-1571459.jpeg?auto=compress&cs=tinysrgb&w=1600',
-  'https://images.pexels.com/photos/1571460/pexels-photo-1571460.jpeg?auto=compress&cs=tinysrgb&w=1600',
-  'https://images.pexels.com/photos/3637729/pexels-photo-3637729.jpeg?auto=compress&cs=tinysrgb&w=1600',
-];
-
-const similarProperties = [
-  {
-    id: 11,
-    title: 'Hillside Glass Retreat',
-    location: 'Malibu, CA',
-    price: '$3.1M',
-    beds: 4,
-    baths: 4,
-    sqft: 3100,
-    image:
-      'https://hoirqrkdgbmvpwutwuwj-all.supabase.co/storage/v1/object/public/assets/assets/26b3f294-2885-4440-ae74-eda7506cca9e_800w.jpg',
-    badge: { text: 'Nearby', color: 'bg-cyan-600/90' },
-    virtualTour: true,
-  },
-  {
-    id: 12,
-    title: 'Clifftop Infinity Villa',
-    location: 'Malibu, CA',
-    price: '$4.6M',
-    beds: 5,
-    baths: 5,
-    sqft: 4200,
-    image:
-      'https://images.pexels.com/photos/439391/pexels-photo-439391.jpeg?auto=compress&cs=tinysrgb&w=1600',
-    badge: { text: 'Sea view', color: 'bg-indigo-900/90' },
-    virtualTour: true,
-  },
-  {
-    id: 13,
-    title: 'Minimalist Coastal Home',
-    location: 'Santa Monica, CA',
-    price: '$2.4M',
-    beds: 3,
-    baths: 3,
-    sqft: 2100,
-    image:
-      'https://images.pexels.com/photos/259588/pexels-photo-259588.jpeg?auto=compress&cs=tinysrgb&w=1600',
-    badge: { text: 'Open House', color: 'bg-white/90', textColor: 'text-indigo-900' },
-    virtualTour: false,
-  },
-];
+const defaultImage = 'https://images.pexels.com/photos/106399/pexels-photo-106399.jpeg';
 
 const PropertyDetailsPage = () => {
+  const { id } = useParams();
   const [activeImage, setActiveImage] = useState(0);
+  const [property, setProperty] = useState(null);
+  const [similarProperties, setSimilarProperties] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Lead capture state
+  const { user, token } = useAuth();
+  const [buyerName, setBuyerName] = useState(user?.name || '');
+  const [buyerEmail, setBuyerEmail] = useState(user?.email || '');
+  const [buyerPhone, setBuyerPhone] = useState(user?.phone || '');
+  const [tourDate, setTourDate] = useState('');
+  const [tourTime, setTourTime] = useState('');
+  const [buyerMessage, setBuyerMessage] = useState('');
+  const [submittingAction, setSubmittingAction] = useState(null);
+  const [leadSuccessMsg, setLeadSuccessMsg] = useState(null);
+  const [leadErrorMsg, setLeadErrorMsg] = useState(null);
+
+  useEffect(() => {
+    if (user) {
+      if (!buyerName && user.name) setBuyerName(user.name);
+      if (!buyerEmail && user.email) setBuyerEmail(user.email);
+      if (!buyerPhone && user.phone) setBuyerPhone(user.phone);
+    }
+  }, [user]);
+
+  const handleBookTour = async (e) => {
+    if (e) e.preventDefault();
+    if (!tourDate) {
+      setLeadErrorMsg("Please choose a preferred tour date.");
+      return;
+    }
+    if (!buyerPhone && !buyerEmail) {
+      setLeadErrorMsg("Please enter your phone number or email so the agent can confirm your tour.");
+      return;
+    }
+
+    setSubmittingAction('tour');
+    setLeadErrorMsg(null);
+    setLeadSuccessMsg(null);
+
+    try {
+      const fullDate = tourTime ? new Date(`${tourDate}T${tourTime}`) : new Date(tourDate);
+      const res = await fetch(API.leads.visit, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          propertyId: id,
+          visitDate: fullDate,
+          notes: buyerMessage,
+          name: buyerName,
+          email: buyerEmail,
+          phone: buyerPhone,
+        }),
+      });
+
+      const resData = await res.json();
+      if (!res.ok) throw new Error(resData.message || 'Failed to schedule tour');
+
+      setLeadSuccessMsg("🎉 Tour Requested Successfully! The agent will call or message to confirm your appointment.");
+      setTourDate('');
+      setTourTime('');
+      setBuyerMessage('');
+    } catch (err) {
+      setLeadErrorMsg(err.message || 'Failed to schedule tour');
+    } finally {
+      setSubmittingAction(null);
+    }
+  };
+
+  const handleContactAgent = async (e) => {
+    if (e) e.preventDefault();
+    if (!buyerPhone && !buyerEmail) {
+      setLeadErrorMsg("Please enter your phone number or email.");
+      return;
+    }
+    const messageToSend = buyerMessage.trim() || `Hi, I am interested in ${property?.title || 'this property'}. Please send more details.`;
+
+    setSubmittingAction('inquiry');
+    setLeadErrorMsg(null);
+    setLeadSuccessMsg(null);
+
+    try {
+      const res = await fetch(API.leads.inquiry, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          propertyId: id,
+          message: messageToSend,
+          name: buyerName,
+          email: buyerEmail,
+          phone: buyerPhone,
+        }),
+      });
+
+      const resData = await res.json();
+      if (!res.ok) throw new Error(resData.message || 'Failed to submit inquiry');
+
+      setLeadSuccessMsg("✅ Inquiry Sent! The agent has received your message and will reach out shortly.");
+      setBuyerMessage('');
+    } catch (err) {
+      setLeadErrorMsg(err.message || 'Failed to send inquiry');
+    } finally {
+      setSubmittingAction(null);
+    }
+  };
+
+  useEffect(() => {
+    const fetchProperty = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(API.properties.detail(id));
+        if (!res.ok) throw new Error('Property not found');
+        const data = await res.json();
+        setProperty(data.data || data);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    const fetchSimilarProperties = async () => {
+      try {
+        const res = await fetch(API.properties.list);
+        if (res.ok) {
+           const data = await res.json();
+           if (data.data) {
+             // Filter out the current property and take max 3
+             const filtered = data.data.filter(p => p._id !== id).slice(0, 3);
+             setSimilarProperties(filtered);
+           }
+        }
+      } catch (err) {
+        console.error('Error fetching similar properties', err);
+      }
+    };
+
+    if (id) {
+       fetchProperty();
+       fetchSimilarProperties();
+    }
+  }, [id]);
+
+  if (loading) {
+    return <div className="text-center py-20 text-white">Loading property details...</div>;
+  }
+
+  if (error || !property) {
+    return <div className="text-center py-20 text-red-400">{error || 'Property not found'}</div>;
+  }
+
+  let images = [];
+  if (property.images && property.images.length > 0) {
+    images = property.images.map(img => img.url || img);
+  } else if (property.image) {
+    images = [property.image];
+  } else {
+    images = [defaultImage];
+  }
+
+  const mapAddress = [
+    property.locationStreet,
+    property.locationCity || property.location?.city,
+    property.locationState || property.location?.state,
+    property.locationZip || property.location?.zip,
+    property.locationCountry || property.location?.country
+  ].filter(Boolean).join(', ') || (typeof property.location === 'string' ? property.location : 'New York');
 
   return (
     <section className="max-w-7xl sm:px-6 mt-10 mx-auto mb-8 px-4">
@@ -97,25 +227,35 @@ const PropertyDetailsPage = () => {
                 Verified luxury listing
               </p>
               <h1 className="text-2xl sm:text-3xl lg:text-4xl text-neutral-100 font-geist tracking-tight font-medium">
-                Oceanview Modern Villa with Infinity Pool
+                {property.title || 'Untitled Property'}
               </h1>
               <p className="flex items-center gap-1 text-sm text-neutral-300 font-geist">
                 <MapPin className="w-4 h-4 stroke-[1.5] text-neutral-400" />
-                <span>Malibu, California 90265 • Pacific Coast Highway</span>
+                <span>
+                  {property.locationCity ? `${property.locationCity}, ${property.locationState || ''}` : 
+                   (property.location?.city ? `${property.location.city}, ${property.location.state || ''}` : 
+                   (typeof property.location === 'string' ? property.location : 'Location unknown'))}
+                </span>
               </p>
             </div>
 
             <div className="space-y-2 text-right">
               <div className="text-3xl sm:text-4xl font-geist tracking-tight font-medium text-neutral-50">
-                $2,800,000
+                {typeof property.price === 'number' 
+                  ? new Intl.NumberFormat('en-IN', { style: 'currency', currency: property.currency || 'INR', maximumFractionDigits: 0 }).format(property.price)
+                  : (property.price || 'Price on request')}
               </div>
-              <p className="text-xs text-neutral-400 font-geist">Estimated mortgage: $15,900/mo</p>
+              <p className="text-xs text-neutral-400 font-geist">Available for immediate closing</p>
               <div className="inline-flex items-center gap-2 mt-2">
-                <span className="rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 text-[11px] font-geist uppercase tracking-wide">
-                  For Sale
+                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-geist uppercase tracking-wide ${
+                  property.status === 'for_rent' 
+                    ? 'bg-blue-500/10 text-blue-300 border-blue-500/30' 
+                    : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                }`}>
+                  {property.status === 'for_rent' ? 'For Rent' : 'For Sale'}
                 </span>
                 <span className="rounded-full bg-white/5 text-neutral-200 border border-white/10 px-2 py-0.5 text-[11px] font-geist uppercase tracking-wide">
-                  Listed 3 days ago
+                  Verified Listing
                 </span>
               </div>
             </div>
@@ -127,7 +267,7 @@ const PropertyDetailsPage = () => {
             <div className="relative group rounded-3xl overflow-hidden border border-white/10 bg-black/40">
               <div className="relative h-[260px] sm:h-[380px] lg:h-[420px]">
                 <img
-                  src={galleryImages[activeImage]}
+                  src={images[activeImage]}
                   alt="Main property"
                   className="w-full h-full object-cover transform transition-transform duration-700 group-hover:scale-[1.03]"
                 />
@@ -148,16 +288,16 @@ const PropertyDetailsPage = () => {
               {/* Bottom overlay specs */}
               <div className="absolute inset-x-0 bottom-0 p-4">
                 <div className="inline-flex items-center gap-3 rounded-full bg-black/60 border border-white/15 px-3 py-1.5 text-xs text-neutral-200 backdrop-blur-md font-geist">
-                  <span>MLS #EV-2048</span>
+                  <span>ID: {property._id ? property._id.slice(-8).toUpperCase() : 'N/A'}</span>
                   <span className="w-px h-3 bg-white/20" />
-                  <span>Exclusive • Off-market ready</span>
+                  <span>Verified • New Listing</span>
                 </div>
               </div>
             </div>
 
             {/* Side gallery thumbs */}
             <div className="grid grid-rows-3 gap-3">
-              {galleryImages.map((src, index) => (
+              {images.slice(0, 3).map((src, index) => (
                 <button
                   key={index}
                   onClick={() => setActiveImage(index)}
@@ -170,14 +310,9 @@ const PropertyDetailsPage = () => {
                   <img
                     src={src}
                     alt={`Gallery ${index + 1}`}
-                    className="w-full object-cover h-[95px] sm:h-[110px] lg:h-[120px] transform transition-transform duration-500 hover:scale-[1.05]"
+                    className="w-full object-cover h-[80px] sm:h-[110px] lg:h-[135px] transform transition-transform duration-500 hover:scale-[1.05]"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent" />
-                  {index === 0 && (
-                    <span className="absolute top-2 left-2 text-[11px] font-geist px-2 py-1 rounded-full bg-emerald-500/90 text-white border border-emerald-200/40">
-                      Featured
-                    </span>
-                  )}
                 </button>
               ))}
             </div>
@@ -193,22 +328,22 @@ const PropertyDetailsPage = () => {
                   Property overview
                 </h2>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs sm:text-sm">
-                  <SpecPill icon={<Bed className="w-4 h-4 stroke-[1.5]" />} label="Bedrooms" value="4" />
-                  <SpecPill icon={<Bath className="w-4 h-4 stroke-[1.5]" />} label="Bathrooms" value="3" />
+                  <SpecPill icon={<Bed className="w-4 h-4 stroke-[1.5]" />} label="Bedrooms" value={property.bedrooms || property.beds || "0"} />
+                  <SpecPill icon={<Bath className="w-4 h-4 stroke-[1.5]" />} label="Bathrooms" value={property.bathrooms || property.baths || "0"} />
                   <SpecPill
                     icon={<Ruler className="w-4 h-4 stroke-[1.5]" />}
                     label="Area"
-                    value="2,800 sq.ft"
+                    value={property.areaSqft || property.sqft ? `${(property.areaSqft || property.sqft).toLocaleString()} sq.ft` : "N/A"}
                   />
                   <SpecPill
                     icon={<Building2 className="w-4 h-4 stroke-[1.5]" />}
                     label="Property type"
-                    value="Villa"
+                    value={property.propertyType || "Residential"}
                   />
                   <SpecPill
                     icon={<Calendar className="w-4 h-4 stroke-[1.5]" />}
-                    label="Year built"
-                    value="2021"
+                    label="Listed"
+                    value="Recently"
                   />
                   <SpecPill
                     icon={<Car className="w-4 h-4 stroke-[1.5]" />}
@@ -234,9 +369,7 @@ const PropertyDetailsPage = () => {
                   Description
                 </h2>
                 <p className="text-sm sm:text-base leading-relaxed text-neutral-300 font-geist">
-                  Perched above the Pacific with seamless indoor‑outdoor living, this
-                  architect‑designed villa features floor‑to‑ceiling glass, warm natural stone,
-                  and a horizon‑level infinity pool overlooking Malibu’s coastline.
+                  {property.description || 'Perched above the Pacific with seamless indoor‑outdoor living, this architect‑designed villa features floor‑to‑ceiling glass, warm natural stone, and a horizon‑level infinity pool overlooking Malibu’s coastline.'}
                 </p>
                 <ul className="list-disc list-inside text-sm text-neutral-300 space-y-1 font-geist">
                   <li>Open‑plan great room with 14ft ceilings and ocean vistas.</li>
@@ -287,8 +420,15 @@ const PropertyDetailsPage = () => {
 
                 <div className="grid lg:grid-cols-[minmax(0,1.4fr),minmax(0,1fr)] gap-4">
                   {/* Map placeholder */}
-                  <div className="rounded-xl overflow-hidden border border-white/10 h-52 bg-gradient-to-br from-indigo-900 via-slate-900 to-emerald-900 flex items-center justify-center text-xs text-neutral-300 font-geist">
-                    Interactive map (embed Google Maps here)
+                  <div className="rounded-xl overflow-hidden border border-white/10 h-52 bg-black/20 flex items-center justify-center">
+                    <iframe
+                      width="100%"
+                      height="100%"
+                      frameBorder="0"
+                      style={{ border: 0 }}
+                      src={`https://maps.google.com/maps?q=${encodeURIComponent(mapAddress)}&output=embed`}
+                      allowFullScreen
+                    ></iframe>
                   </div>
 
                   {/* Nearby places */}
@@ -455,15 +595,17 @@ const PropertyDetailsPage = () => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {similarProperties.map((p) => (
-                <div key={p.id} className="group relative">
+              {similarProperties.length > 0 ? similarProperties.map((p) => (
+                <div key={p._id || p.id} className="group relative">
                   <PropertyCard property={p} />
                   <button className="absolute bottom-4 left-4 inline-flex items-center gap-1.5 text-[11px] font-geist rounded-full bg-black/70 hover:bg-black/90 border border-white/20 px-3 py-1.5 text-neutral-100 backdrop-blur-md">
                     View details
                     <ArrowRight className="w-3.5 h-3.5 stroke-[1.5]" />
                   </button>
                 </div>
-              ))}
+              )) : (
+                <div className="col-span-3 text-center text-sm text-neutral-400 py-8 font-geist">No similar properties found.</div>
+              )}
             </div>
           </div>
         </div>
@@ -524,12 +666,16 @@ const Tag = ({ icon, label }) => (
   </span>
 );
 
-const InputField = ({ label, placeholder, type = 'text' }) => (
+const InputField = ({ label, placeholder, value, onChange, type = 'text', required = false }) => (
   <div className="space-y-1.5">
-    <label className="text-xs text-neutral-300 font-geist">{label}</label>
+    <label className="text-xs text-neutral-300 font-geist">
+      {label} {required && <span className="text-red-400">*</span>}
+    </label>
     <input
       type={type}
       placeholder={placeholder}
+      value={value}
+      onChange={onChange}
       className="w-full rounded-xl text-sm bg-black/10 text-white border border-white/10 focus:outline-none focus:ring-1 focus:ring-white/20 focus:border-white/20 backdrop-blur-md px-3 py-2.5 placeholder:text-white/40"
     />
   </div>

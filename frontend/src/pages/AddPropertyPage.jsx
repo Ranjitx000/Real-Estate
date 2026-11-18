@@ -1,5 +1,9 @@
-// pages/AddPropertyPage.jsx
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { ToastContainer } from '../component/Toast.jsx';
+import { useToast } from '../hooks/useToast.js';
+import { API } from '../config/api.js';
 import {
   Home,
   MapPin,
@@ -22,9 +26,15 @@ import {
   Type,
 } from 'lucide-react';
 import PropertyCard from '../component/PropertyCard.jsx';
+import PublishSuccessModal from '../component/PublishSuccessModal.jsx';
 
 const AddPropertyPage = () => {
+  const navigate = useNavigate();
+  const { token } = useAuth();
+  const { toasts, addToast, removeToast } = useToast();
   const [step, setStep] = useState(1);
+  const [publishedProperty, setPublishedProperty] = useState(null);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
 
   const [form, setForm] = useState({
     title: '',
@@ -61,8 +71,26 @@ const AddPropertyPage = () => {
 
     videoUrl: '',
     tourUrl: '',
-    images: [], // for UI only
+    images: [], // File objects
+    imagePreviews: [], // URL strings for UI only
   });
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  // ── Auth guard ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!token) {
+      addToast({
+        type: 'warning',
+        title: 'Login required',
+        message: 'Please sign in to add a property listing.',
+        duration: 3500,
+      });
+      navigate('/login');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   const handleChange = (field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -80,13 +108,19 @@ const AddPropertyPage = () => {
     const previews = files.map((file) => ({
       name: file.name,
       url: URL.createObjectURL(file),
+      file: file,
     }));
-    setForm((prev) => ({ ...prev, images: [...prev.images, ...previews] }));
+    
+    setForm((prev) => ({ 
+      ...prev, 
+      images: [...prev.images, ...files],
+      imagePreviews: [...prev.imagePreviews, ...previews] 
+    }));
   };
 
   const previewProperty = useMemo(() => {
     const firstImage =
-      form.images[0]?.url ||
+      form.imagePreviews[0]?.url ||
       'https://images.pexels.com/photos/259580/pexels-photo-259580.jpeg?auto=compress&cs=tinysrgb&w=1600';
     const beds = form.bedrooms || 4;
     const baths = form.bathrooms || 3;
@@ -115,6 +149,165 @@ const AddPropertyPage = () => {
 
   const nextStep = () => setStep((s) => Math.min(4, s + 1));
   const prevStep = () => setStep((s) => Math.max(1, s - 1));
+
+  const handlePublish = async () => {
+    // ── Auth check ────────────────────────────────────────────────────────
+    if (!token) {
+      addToast({ type: 'error', title: 'Authentication required', message: 'Please log in to publish a property.' });
+      navigate('/login');
+      return;
+    }
+
+    // ── Required field validation ─────────────────────────────────────────
+    if (!form.title || !form.price || !form.bedrooms || !form.bathrooms || !form.area) {
+      const missing = [
+        !form.title    && 'Title',
+        !form.price    && 'Price',
+        !form.bedrooms && 'Bedrooms',
+        !form.bathrooms&& 'Bathrooms',
+        !form.area     && 'Area',
+      ].filter(Boolean).join(', ');
+      setError(`Missing required fields: ${missing}.`);
+      addToast({
+        type: 'warning',
+        title: 'Missing required fields',
+        message: `Please fill in: ${missing}.`,
+      });
+      setStep(1);
+      return;
+    }
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const fd = new FormData();
+
+      // ── Basic Info ───────────────────────────────────────────────────────
+      fd.append('title',        form.title);
+      fd.append('status',       form.status === 'For sale' ? 'for_sale' : 'for_rent');
+      fd.append('propertyType', form.type.toLowerCase());
+      fd.append('price',        form.price);
+      fd.append('currency',     form.currency);
+      fd.append('description',  form.description);
+      fd.append('isFeatured',   String(form.featured));
+
+      // ── Specs ────────────────────────────────────────────────────────────
+      fd.append('bedrooms',  form.bedrooms);
+      fd.append('bathrooms', form.bathrooms);
+      fd.append('areaSqft',  form.area);
+      if (form.lotSize)   fd.append('lotSize',   form.lotSize);
+      if (form.parking)   fd.append('parking',   form.parking);
+      if (form.yearBuilt) fd.append('yearBuilt', form.yearBuilt);
+      if (form.floors)    fd.append('floors',    form.floors);
+
+      // ── Media URLs ───────────────────────────────────────────────────────
+      if (form.videoUrl) fd.append('videoUrl',       form.videoUrl);
+      if (form.tourUrl)  fd.append('virtualTourUrl', form.tourUrl);
+
+      // ── Location — flat fields (multer can't parse bracket notation) ─────
+      fd.append('locationStreet',  form.street  || '');
+      fd.append('locationCity',    form.city    || '');
+      fd.append('locationState',   form.state   || '');
+      fd.append('locationZip',     form.zip     || '');
+      fd.append('locationCountry', form.country || 'India');
+
+      // ── Amenities — JSON string (bracket-indexed keys break in multer) ───
+      const activeAmenities = Object.entries(form.amenities)
+        .filter(([, active]) => active)
+        .map(([key]) => ({ label: key }));
+      fd.append('amenities', JSON.stringify(activeAmenities));
+
+      // ── Images ───────────────────────────────────────────────────────────
+      form.images.forEach((file) => fd.append('images', file));
+
+      // ── Submit ───────────────────────────────────────────────────────────
+      const res = await fetch(API.properties.create, {
+        method: 'POST',
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        },
+        body: fd,
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || data.message || 'Failed to create property');
+      }
+
+      // ── Show Success Celebration Modal with published property data ──────
+      const savedDoc = data.data || {
+        ...form,
+        _id: data._id || data.id,
+        price: Number(form.price),
+        bedrooms: Number(form.bedrooms),
+        bathrooms: Number(form.bathrooms),
+        areaSqft: Number(form.area),
+        images: form.imagePreviews.map((url) => ({ url })),
+      };
+
+      setPublishedProperty(savedDoc);
+      setShowSuccessModal(true);
+
+      // ── Success notification ─────────────────────────────────────────────
+      addToast({
+        type: 'success',
+        title: '🏡 Property published!',
+        message: `"${form.title}" is now live and visible to buyers.`,
+        duration: 5000,
+      });
+
+    } catch (err) {
+      console.error('Publish error:', err);
+      const msg = err.message || 'An unexpected error occurred. Please try again.';
+      setError(msg);
+      addToast({ type: 'error', title: 'Failed to publish', message: msg });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleResetAndAddAnother = () => {
+    setShowSuccessModal(false);
+    setPublishedProperty(null);
+    setForm({
+      title: '',
+      status: 'For sale',
+      type: 'House',
+      price: '',
+      currency: 'INR',
+      featured: false,
+      street: '',
+      city: '',
+      state: '',
+      zip: '',
+      country: 'India',
+      bedrooms: '',
+      bathrooms: '',
+      area: '',
+      lotSize: '',
+      parking: '',
+      yearBuilt: '',
+      floors: '',
+      description: '',
+      amenities: {
+        pool: false,
+        garden: false,
+        gym: false,
+        security: false,
+        elevator: false,
+        furnished: false,
+        oceanView: false,
+      },
+      videoUrl: '',
+      tourUrl: '',
+      images: [],
+      imagePreviews: [],
+    });
+    setStep(1);
+  };
 
   return (
     <section className="max-w-7xl sm:px-6 mt-10 mx-auto mb-8 px-4">
@@ -178,12 +371,13 @@ const AddPropertyPage = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <InputField
                       label="Listing title"
+                      required
                       placeholder="Oceanview Modern Villa with Infinity Pool"
                       value={form.title}
                       onChange={(e) => handleChange('title', e.target.value)}
                     />
                     <div className="space-y-1.5">
-                      <label className="text-xs text-neutral-300 font-geist">Status</label>
+                      <label className="text-xs text-neutral-300 font-geist">Status <span className="text-red-500">*</span></label>
                       <div className="grid grid-cols-2 gap-2">
                         <ToggleChip
                           active={form.status === 'For sale'}
@@ -201,7 +395,7 @@ const AddPropertyPage = () => {
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
                     <div className="space-y-1.5">
-                      <label className="text-xs text-neutral-300 font-geist">Property type</label>
+                      <label className="text-xs text-neutral-300 font-geist">Property type <span className="text-red-500">*</span></label>
                       <div className="relative">
                         <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50 stroke-[1.5]" />
                         <select
@@ -223,7 +417,7 @@ const AddPropertyPage = () => {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-xs text-neutral-300 font-geist"> Price</label>
+                      <label className="text-xs text-neutral-300 font-geist">Price <span className="text-red-500">*</span></label>
                       <div className="relative">
                         <IndianRupee className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50 stroke-[1.5]" />
                         <input
@@ -237,7 +431,7 @@ const AddPropertyPage = () => {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-xs text-neutral-300 font-geist">Currency</label>
+                      <label className="text-xs text-neutral-300 font-geist">Currency <span className="text-neutral-500 ml-1">(Optional)</span></label>
                       <select
                         value={form.currency}
                         onChange={(e) => handleChange('currency', e.target.value)}
@@ -306,7 +500,7 @@ const AddPropertyPage = () => {
                           onChange={(e) => handleChange('zip', e.target.value)}
                         />
                         <div className="space-y-1.5">
-                          <label className="text-xs text-neutral-300 font-geist">Country</label>
+                          <label className="text-xs text-neutral-300 font-geist">Country <span className="text-neutral-500 ml-1">(Optional)</span></label>
                           <select
                             value={form.country}
                             onChange={(e) => handleChange('country', e.target.value)}
@@ -319,6 +513,20 @@ const AddPropertyPage = () => {
                           </select>
                         </div>
                       </div>
+
+                      {/* Map Preview */}
+                      {[form.street, form.city, form.state, form.zip, form.country].filter(Boolean).length > 0 && (
+                        <div className="mt-4 rounded-xl overflow-hidden border border-white/10 h-64 bg-black/20">
+                          <iframe
+                            width="100%"
+                            height="100%"
+                            frameBorder="0"
+                            style={{ border: 0 }}
+                            src={`https://maps.google.com/maps?q=${encodeURIComponent([form.street, form.city, form.state, form.zip, form.country].filter(Boolean).join(', '))}&output=embed`}
+                            allowFullScreen
+                          ></iframe>
+                        </div>
+                      )}
                     </div>
                   </CardSection>
 
@@ -329,6 +537,7 @@ const AddPropertyPage = () => {
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <InputIconField
                         label="Bedrooms"
+                        required
                         icon={<Bed className="w-4 h-4 stroke-[1.5]" />}
                         placeholder="4"
                         value={form.bedrooms}
@@ -336,6 +545,7 @@ const AddPropertyPage = () => {
                       />
                       <InputIconField
                         label="Bathrooms"
+                        required
                         icon={<Bath className="w-4 h-4 stroke-[1.5]" />}
                         placeholder="3"
                         value={form.bathrooms}
@@ -343,6 +553,7 @@ const AddPropertyPage = () => {
                       />
                       <InputIconField
                         label="Area (sq.ft)"
+                        required
                         icon={<Ruler className="w-4 h-4 stroke-[1.5]" />}
                         placeholder="2800"
                         value={form.area}
@@ -406,9 +617,9 @@ const AddPropertyPage = () => {
                       </p>
                     </label>
 
-                    {form.images.length > 0 && (
+                    {form.imagePreviews.length > 0 && (
                       <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
-                        {form.images.map((img, idx) => (
+                        {form.imagePreviews.map((img, idx) => (
                           <div
                             key={idx}
                             className="relative h-20 rounded-xl overflow-hidden border border-white/10"
@@ -430,7 +641,7 @@ const AddPropertyPage = () => {
                   >
                     <div className="space-y-3">
                       <div className="space-y-1.5">
-                        <label className="text-xs text-neutral-300 font-geist">Description</label>
+                        <label className="text-xs text-neutral-300 font-geist">Description <span className="text-neutral-500 ml-1">(Optional)</span></label>
                         <textarea
                           rows={4}
                           placeholder="Describe what makes this property unique, layout details, views, and finishes..."
@@ -508,6 +719,11 @@ const AddPropertyPage = () => {
                       Media & description
                     </span>
                   </div>
+                  {error && (
+                    <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400 font-geist">
+                      {error}
+                    </div>
+                  )}
                 </CardSection>
               )}
 
@@ -533,10 +749,11 @@ const AddPropertyPage = () => {
                   )}
                   <button
                     type="button"
-                    onClick={step === 4 ? () => {} : nextStep}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-transparent bg-white px-4 py-1.5 text-xs font-geist font-medium tracking-tight text-neutral-900 hover:bg-white/90"
+                    onClick={step === 4 ? handlePublish : nextStep}
+                    disabled={isSubmitting}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-transparent bg-white px-4 py-1.5 text-xs font-geist font-medium tracking-tight text-neutral-900 hover:bg-white/90 disabled:opacity-50"
                   >
-                    {step === 4 ? 'Publish listing' : 'Continue'}
+                    {step === 4 ? (isSubmitting ? 'Publishing...' : 'Publish listing') : 'Continue'}
                     <ArrowRight className="w-3.5 h-3.5 stroke-[1.5]" />
                   </button>
                 </div>
@@ -587,6 +804,16 @@ const AddPropertyPage = () => {
           </div>
         </div>
       </div>
+      {/* Toast notifications — position:fixed, DOM location doesn't matter */}
+      <ToastContainer toasts={toasts} removeToast={removeToast} />
+
+      {/* Celebratory Success Modal with Particle Confetti & Live Preview */}
+      <PublishSuccessModal
+        isOpen={showSuccessModal}
+        onClose={() => setShowSuccessModal(false)}
+        property={publishedProperty}
+        onAddAnother={handleResetAndAddAnother}
+      />
     </section>
   );
 };
@@ -617,9 +844,11 @@ const CardSection = ({ title, icon, children }) => (
   </div>
 );
 
-const InputField = ({ label, placeholder, value, onChange, type = 'text' }) => (
+const InputField = ({ label, placeholder, value, onChange, type = 'text', required = false }) => (
   <div className="space-y-1.5">
-    <label className="text-xs text-neutral-300 font-geist">{label}</label>
+    <label className="text-xs text-neutral-300 font-geist">
+      {label} {required ? <span className="text-red-500">*</span> : <span className="text-neutral-500 ml-1">(Optional)</span>}
+    </label>
     <input
       type={type}
       placeholder={placeholder}
@@ -630,9 +859,11 @@ const InputField = ({ label, placeholder, value, onChange, type = 'text' }) => (
   </div>
 );
 
-const InputIconField = ({ label, placeholder, value, onChange, icon, type = 'text' }) => (
+const InputIconField = ({ label, placeholder, value, onChange, icon, type = 'text', required = false }) => (
   <div className="space-y-1.5">
-    <label className="text-xs text-neutral-300 font-geist">{label}</label>
+    <label className="text-xs text-neutral-300 font-geist">
+      {label} {required ? <span className="text-red-500">*</span> : <span className="text-neutral-500 ml-1">(Optional)</span>}
+    </label>
     <div className="relative">
       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50">{icon}</span>
       <input

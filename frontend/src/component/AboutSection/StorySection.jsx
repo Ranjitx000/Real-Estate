@@ -7,7 +7,7 @@ const StorySection = () => {
     <div className="lg:col-span-2 space-y-6">
       <div className="relative rounded-2xl overflow-hidden border border-white/10">
         <img 
-          src="https://hoirqrkdgbmvpwutwuwj.supabase.co/storage/v1/object/public/assets/assets/da666542-bfa8-493a-af68-db5a713dc548_1600w.jpg" 
+          src="https://images.pexels.com/photos/1732414/pexels-photo-1732414.jpeg?auto=compress&cs=tinysrgb&w=1600" 
           alt="Clients touring a modern property" 
           className="w-full h-[260px] sm:h-[360px] object-cover"
         />

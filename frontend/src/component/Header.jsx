@@ -2,9 +2,11 @@
 import React, { useState } from 'react';
 import { MapPin, ArrowRight, Menu, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 const Header = () => {
   const [open, setOpen] = useState(false);
+  const { user, token, logout } = useAuth();
 
   return (
     <>
@@ -40,13 +42,33 @@ const Header = () => {
               <a className="text-sm font-medium text-neutral-300 hover:text-white tracking-tight font-geist">Rent</a>
               <Link to="/add-property" className="text-sm font-medium text-neutral-300 hover:text-white tracking-tight font-geist">Sell Property</Link>
             
-              <a className="text-sm font-medium text-neutral-300 hover:text-white tracking-tight font-geist">Agents</a>
+              <Link to="/Agent" className="text-sm font-medium text-neutral-300 hover:text-white tracking-tight font-geist">Agents</Link>
+              {user?.role === 'admin' && (
+                <Link to="/admin" className="text-sm font-medium text-indigo-400 hover:text-indigo-300 tracking-tight font-geist">Admin Dashboard</Link>
+              )}
             </nav>
 
-            <Link to="/Listing" className="group inline-flex items-center gap-2 text-sm font-medium text-neutral-900 tracking-tight bg-white hover:bg-indigo-100 border border-white/10 rounded-full px-4 py-2">
-              <span className="font-geist">List a Property</span>
-              <ArrowRight className="w-4 h-4 stroke-[1.5]" />
-            </Link>
+
+            {token ? (
+              <div className="flex items-center gap-4">
+                <button 
+                  onClick={logout}
+                  className="text-sm font-medium text-neutral-300 hover:text-white tracking-tight font-geist"
+                >
+                  Logout
+                </button>
+                <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-500 to-emerald-500 flex items-center justify-center border border-white/20">
+                   <span className="text-xs font-bold text-white uppercase">{user?.name?.charAt(0) || 'U'}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-4 border-l border-white/10 pl-4">
+                <Link to="/login" className="text-sm font-medium text-neutral-300 hover:text-white tracking-tight font-geist">Login</Link>
+                <Link to="/register" className="inline-flex items-center justify-center text-sm font-medium text-neutral-900 tracking-tight bg-white hover:bg-neutral-200 border border-transparent rounded-full px-4 py-2 transition-colors">
+                  Sign up
+                </Link>
+              </div>
+            )}
           </div>
 
           {/* Mobile Menu Button */}
@@ -72,12 +94,36 @@ const Header = () => {
             <a className="text-lg font-medium hover:text-white">Buy</a>
             <a className="text-lg font-medium hover:text-white">Rent</a>
             <Link to="/add-property" className="text-lg font-medium hover:text-white">Sell Property</Link>
-            <a className="text-lg font-medium hover:text-white">Agents</a>
+            <Link to="/Agent" className="text-lg font-medium hover:text-white">Agents</Link>
+            {user?.role === 'admin' && (
+              <Link to="/admin" onClick={() => setOpen(false)} className="text-lg font-medium text-indigo-400 hover:text-indigo-300">Admin Dashboard</Link>
+            )}
+            
+            <div className="w-full h-px bg-white/10 my-2" />
 
-            <Link to="/Listing" className="mt-6 group inline-flex items-center gap-2 text-base font-medium text-neutral-900 tracking-tight bg-white hover:bg-indigo-100 border border-white/10 rounded-full px-6 py-3">
-              <span className="font-geist">List a Property</span>
-              <ArrowRight className="w-5 h-5 stroke-[1.5]" />
-            </Link>
+            {token ? (
+              <div className="flex flex-col items-center gap-4 w-full">
+                <div className="flex items-center gap-3">
+                   <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-indigo-500 to-emerald-500 flex items-center justify-center border border-white/20">
+                      <span className="text-sm font-bold text-white uppercase">{user?.name?.charAt(0) || 'U'}</span>
+                   </div>
+                   <span className="text-neutral-100 font-medium">{user?.name || 'User'}</span>
+                </div>
+                <button 
+                  onClick={() => { logout(); setOpen(false); }}
+                  className="text-lg font-medium text-red-400 hover:text-red-300"
+                >
+                  Logout
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-4 w-full">
+                <Link to="/login" onClick={() => setOpen(false)} className="text-lg font-medium hover:text-white">Login</Link>
+                <Link to="/register" onClick={() => setOpen(false)} className="w-full text-center text-lg font-medium text-neutral-900 bg-white rounded-full py-3">
+                  Sign up
+                </Link>
+              </div>
+            )}
           </div>
         </div>
       )}

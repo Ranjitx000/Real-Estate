@@ -18,93 +18,15 @@ import {
   Rows3,
 } from 'lucide-react';
  import PropertyCard from '../component/PropertyCard';
-
-const mockProperties = [
-  {
-    id: 1,
-    title: 'Oceanview Modern Villa',
-    location: 'Malibu, CA',
-    price: '$2.8M',
-    beds: 4,
-    baths: 3,
-    sqft: 2800,
-    image:
-      'https://hoirqrkdgbmvpwutwuwj-all.supabase.co/storage/v1/object/public/assets/assets/26b3f294-2885-4440-ae74-eda7506cca9e_800w.jpg',
-    badge: { text: 'New', color: 'bg-cyan-600/90' },
-    virtualTour: true,
-  },
-  {
-    id: 2,
-    title: 'Skyline Penthouse Suite',
-    location: 'Manhattan, NY',
-    price: '$5.2M',
-    beds: 5,
-    baths: 4,
-    sqft: 4500,
-    image:
-      'https://hoirqrkdgbmvpwutwuwj-all.supabase.co/storage/v1/object/public/assets/assets/50eb2e09-7421-4468-b850-e7d07311523d_800w.jpg',
-    badge: { text: 'Premium', color: 'bg-indigo-900/90' },
-    virtualTour: true,
-  },
-  {
-    id: 3,
-    title: 'Contemporary Townhouse',
-    location: 'Austin, TX',
-    price: '$1.15M',
-    beds: 3,
-    baths: 3,
-    sqft: 1900,
-    image:
-      'https://hoirqrkdgbmvpwutwuwj-all.supabase.co/storage/v1/object/public/assets/assets/c493dcb7-d70e-440e-92e9-4b752945750e_800w.jpg',
-    badge: { text: 'Open House', color: 'bg-white/90', textColor: 'text-indigo-900' },
-    virtualTour: false,
-  },
-  // Duplicate a few more for pagination demo
-  {
-    id: 4,
-    title: 'Lakefront Glass Residence',
-    location: 'Seattle, WA',
-    price: '$2.1M',
-    beds: 4,
-    baths: 4,
-    sqft: 3200,
-    image:
-      'https://images.pexels.com/photos/1571460/pexels-photo-1571460.jpeg?auto=compress&cs=tinysrgb&w=1600',
-    badge: { text: 'Verified', color: 'bg-emerald-700/90' },
-    virtualTour: true,
-  },
-  {
-    id: 5,
-    title: 'Minimalist City Loft',
-    location: 'San Francisco, CA',
-    price: '$1.9M',
-    beds: 2,
-    baths: 2,
-    sqft: 1500,
-    image:
-      'https://images.pexels.com/photos/3637729/pexels-photo-3637729.jpeg?auto=compress&cs=tinysrgb&w=1600',
-    badge: { text: 'Price Drop', color: 'bg-amber-600/90' },
-    virtualTour: false,
-  },
-  {
-    id: 6,
-    title: 'Garden Courtyard Home',
-    location: 'Portland, OR',
-    price: '$980K',
-    beds: 3,
-    baths: 2,
-    sqft: 1800,
-    image:
-      'https://images.pexels.com/photos/1571459/pexels-photo-1571459.jpeg?auto=compress&cs=tinysrgb&w=1600',
-    badge: { text: 'Hot', color: 'bg-rose-600/90' },
-    virtualTour: false,
-  },
-];
+import { API } from '../config/api.js';
 
 const PropertyListingsPage = () => {
   const [view, setView] = useState('grid');
   const [page, setPage] = useState(1);
   const pageSize = 6;
+  const [properties, setProperties] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   const [filters, setFilters] = useState({
     location: '',
@@ -138,9 +60,41 @@ const PropertyListingsPage = () => {
     }));
   };
 
+  const fetchProperties = async () => {
+    try {
+      setLoading(true);
+      // Fallback filter fetching (using filter endpoint if needed, else listall)
+      const query = new URLSearchParams({
+        page,
+        limit: pageSize,
+        sort: filters.sort === 'Newest' ? 'latest' : filters.sort === 'Price: Low to High' ? 'price_low' : 'price_high'
+      });
+      if (filters.location) query.append('city', filters.location);
+      if (filters.type !== 'Any type') query.append('propertyType', filters.type.toLowerCase());
+      
+      const res = await fetch(`${API.properties.filter}?${query.toString()}`);
+      if (!res.ok) throw new Error('Failed to fetch properties');
+      const data = await res.json();
+      
+      if (data.properties) {
+        setProperties(data.properties);
+      } else if (data.data) {
+        setProperties(data.data);
+      }
+    } catch (err) {
+      console.error(err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    fetchProperties();
+  }, [page, filters.sort]);
+
   const handleSearch = () => {
-    // later connect to backend
-    console.log('Apply filters:', filters, 'page:', page);
+    fetchProperties();
   };
 
   return (
@@ -444,19 +398,22 @@ const PropertyListingsPage = () => {
                     : 'space-y-4'
                 }
               >
-                {mockProperties.map((property) => (
-                    
-               
-
+              {loading ? (
+                <div className="text-center py-10 text-neutral-400">Loading properties...</div>
+              ) : error ? (
+                <div className="text-center py-10 text-red-400">{error}</div>
+              ) : (
+                properties.map((property) => (
                   <div
-                    key={property.id}
+                    key={property._id || property.id}
                     className={view === 'list' ? 'md:grid md:grid-cols-[260px,minmax(0,1fr)] gap-4' : ''}
                   >
                    
                 <PropertyCard property={property} listLayout={view === 'list'} />   
                   </div>
                   
-                ))}
+                ))
+              )}
               </div>
 
               {/* Pagination */}
